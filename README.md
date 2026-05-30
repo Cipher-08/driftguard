@@ -7,7 +7,7 @@ DriftGuard is a modern, unified dashboard for cloud drift detection and complian
 
 ---
 
-## 🚀 Features
+##  Features
 - **Secure Cloud Onboarding:** Connect your GCP (and soon AWS/Azure) accounts with a few clicks.
 - **Unified Dashboard:** See drift and compliance summaries at a glance.
 - **Resource & Drift Explorer:** Browse all detected resources and drifts.
@@ -16,7 +16,7 @@ DriftGuard is a modern, unified dashboard for cloud drift detection and complian
 
 ---
 
-## 🛠️ Getting Started
+##  How to get started
 
 ### Prerequisites
 - Go 1.22+
@@ -45,7 +45,7 @@ npm run dev
 
 ---
 
-## 📦 Project Structure
+##  Project Structure
 
 - `frontend/` — React app (UI)
 - `internal/` — Go backend (API, collectors, models)
@@ -54,7 +54,7 @@ npm run dev
 
 ---
 
-## 🧩 Status & Roadmap
+##  Status & Roadmap
 - [x] GCP credential onboarding UI
 - [x] Backend API for credential storage
 - [ ] GCP resource collector (coming soon)
@@ -63,7 +63,7 @@ npm run dev
 
 ---
 
-## 🤝 Contributing
+##  Contributing
 PRs and issues are welcome! Please open an issue to discuss major changes.
 
 ---
