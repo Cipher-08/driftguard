@@ -1,0 +1,40 @@
+# Node
+frontend/node_modules/
+frontend/.env
+
+# Build
+frontend/dist/
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Env
+.env
+.env.*
+
+# Coverage
+coverage/
+
+# Misc
+*.local
+
+# Python (if any scripts)
+__pycache__/
+*.pyc
