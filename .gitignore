@@ -1,40 +1,75 @@
-# Node
-frontend/node_modules/
-frontend/.env
+# ==========================================
+# GO BINARIES — the main fix needed
+# ==========================================
 
-# Build
-frontend/dist/
+# The compiled binary that was accidentally committed
+/api
+/cmd/api/api
+/cmd/api/driftguard
 
-# Logs
-*.log
-
-# OS
-.DS_Store
-
-# Go
+# All Go binaries generally
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
+
+# Test binaries
 *.test
 *.out
 
-# IDE
-.vscode/
-.idea/
-*.swp
+# Go build cache
+/vendor/
 
-# Env
+# ==========================================
+# ENVIRONMENT & SECRETS — never commit these
+# ==========================================
 .env
 .env.*
+!.env.example
+*.pem
+*.key
+service-account.json
+gcp-credentials.json
+credentials.json
 
-# Coverage
-coverage/
+# ==========================================
+# FRONTEND (React / Node)
+# ==========================================
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+frontend/.env
+frontend/.env.local
+frontend/.env.*.local
 
-# Misc
-*.local
+# ==========================================
+# GO COVERAGE & PROFILING
+# ==========================================
+coverage.out
+coverage.html
+*.prof
+*.pprof
 
-# Python (if any scripts)
-__pycache__/
-*.pyc
+# ==========================================
+# OS & EDITOR
+# ==========================================
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ==========================================
+# DOCKER
+# ==========================================
+.docker/
+
+# ==========================================
+# LOGS & TEMP
+# ==========================================
+*.log
+tmp/
+temp/
