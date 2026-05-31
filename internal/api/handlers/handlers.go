@@ -1,3 +1,33 @@
+// ListCredentials returns all connected cloud accounts for the org
+func (h *Handler) ListCredentials(c *gin.Context) {
+	orgID := middleware.GetOrgID(c)
+	rows, err := h.db.Query(c.Request.Context(),
+		`SELECT id, provider, name, is_active, created_at FROM cloud_credentials WHERE org_id = $1 ORDER BY created_at DESC`,
+		orgID,
+	)
+	if err != nil {
+		c.JSON(500, gin.H{"error": "failed to list credentials"})
+		return
+	}
+	defer rows.Close()
+	creds := []gin.H{}
+	for rows.Next() {
+		var id, provider, name string
+		var isActive bool
+		var createdAt string
+		if err := rows.Scan(&id, &provider, &name, &isActive, &createdAt); err != nil {
+			continue
+		}
+		creds = append(creds, gin.H{
+			"id": id,
+			"provider": provider,
+			"name": name,
+			"is_active": isActive,
+			"created_at": createdAt,
+		})
+	}
+	c.JSON(200, gin.H{"accounts": creds})
+}
 package handlers
 
 import (

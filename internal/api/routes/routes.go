@@ -54,6 +54,7 @@ func Setup(
 
 		// Cloud Credentials
 		api.POST("/credentials", h.AddCredential)
+		api.GET("/credentials", h.ListCredentials)
 
 		// Resources
 		api.GET("/resources", h.ListResources)
