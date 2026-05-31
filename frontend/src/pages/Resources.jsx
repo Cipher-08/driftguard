@@ -11,13 +11,23 @@ export default function Resources() {
   });
 
   return (
-    <div className="p-8">
+    <div className="p-8 max-w-5xl mx-auto">
       <h1 className="text-2xl font-bold text-brand-700 mb-4">Resource Inventory</h1>
-      <div className="bg-white p-4 rounded shadow">
-        {isLoading && <p className="text-gray-600">Loading...</p>}
-        {error && <p className="text-red-600">Error loading resources.</p>}
+      <div className="bg-white p-4 rounded shadow overflow-x-auto">
+        {isLoading && (
+          <div className="flex items-center gap-2 text-gray-600 animate-pulse">
+            <svg className="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path></svg>
+            Loading resources...
+          </div>
+        )}
+        {error && (
+          <div className="bg-red-50 border border-red-200 text-red-700 rounded p-3 mb-4">Error loading resources. Please try again.</div>
+        )}
         {!isLoading && !error && data && data.length === 0 && (
-          <p className="text-gray-600">No resources found.</p>
+          <div className="text-gray-500 text-center py-8">
+            <svg className="w-12 h-12 mx-auto mb-2 text-gray-300" fill="none" viewBox="0 0 24 24"><path stroke="currentColor" strokeWidth="2" d="M12 4v16m8-8H4"/></svg>
+            <div>No resources found. Connect a cloud account to get started.</div>
+          </div>
         )}
         {!isLoading && !error && data && data.length > 0 && (
           <table className="w-full text-sm">
@@ -44,6 +54,7 @@ export default function Resources() {
           </table>
         )}
       </div>
+      {/* Toast notifications placeholder */}
     </div>
   );
 }
