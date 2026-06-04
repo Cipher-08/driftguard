@@ -7,6 +7,7 @@ import (
 	"github.com/driftguard/driftguard/internal/api/middleware"
 	"github.com/driftguard/driftguard/internal/config"
 	"github.com/driftguard/driftguard/internal/engine"
+	"github.com/driftguard/driftguard/internal/llm"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -19,6 +20,8 @@ func Setup(
 	db *pgxpool.Pool,
 	_ *redis.Client,
 	eng *engine.Engine,
+	llmClient llm.Client,
+	runScan handlers.ScanFunc,
 	logger *zap.Logger,
 ) *gin.Engine {
 	if cfg.Environment == "production" {
@@ -38,7 +41,7 @@ func Setup(
 		MaxAge:           12 * time.Hour,
 	}))
 
-	h := handlers.New(cfg, db, eng, logger)
+	h := handlers.New(cfg, db, eng, llmClient, runScan, logger)
 
 	// Public routes
 	r.GET("/health", h.Health)
@@ -55,16 +58,22 @@ func Setup(
 		// Cloud Credentials
 		api.POST("/credentials", h.AddCredential)
 		api.GET("/credentials", h.ListCredentials)
+		api.DELETE("/credentials/:id", h.DeleteCredential)
+
+		// On-demand scan
+		api.POST("/scan", h.TriggerScan)
 
 		// Resources
 		api.GET("/resources", h.ListResources)
 
-		// Drift
+		// Drift (consistent :id param throughout to avoid Gin wildcard conflicts)
 		api.GET("/drifts", h.ListDrifts)
+		api.GET("/drifts/:id", h.GetDrift)
 		api.PATCH("/drifts/:id/resolve", h.ResolveDrift)
 
-			   // Remediation
-		api.POST("/drifts/:drift_id/remediation/:rem_id/pr", h.OpenPR)
+		// Remediation
+		api.POST("/drifts/:id/remediation", h.GenerateRemediation)
+		api.POST("/drifts/:id/remediation/:rem_id/pr", h.OpenPR)
 	}
 
 	return r

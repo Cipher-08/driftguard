@@ -1,0 +1,12 @@
+# Keep the backend build context lean.
+.git
+.github
+frontend
+*.md
+api
+.env
+.env.*
+!.env.example
+**/node_modules
+**/dist
+*.log

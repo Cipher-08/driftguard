@@ -11,12 +11,20 @@ import (
 
 	"github.com/driftguard/driftguard/internal/api/routes"
 	"github.com/driftguard/driftguard/internal/collectors/aws"
+	"github.com/driftguard/driftguard/internal/collectors/gcp"
+	"github.com/driftguard/driftguard/internal/compliance"
 	"github.com/driftguard/driftguard/internal/config"
 	"github.com/driftguard/driftguard/internal/db"
 	"github.com/driftguard/driftguard/internal/engine"
+	"github.com/driftguard/driftguard/internal/llm"
 	"github.com/driftguard/driftguard/internal/scheduler"
 	"go.uber.org/zap"
 )
+
+// collector is the common interface for cloud resource collectors.
+type collector interface {
+	Collect(ctx context.Context) error
+}
 
 func main() {
 	// Logger
@@ -48,29 +56,57 @@ func main() {
 	}
 	defer redisClient.Close()
 
-	// Drift engine
-	driftEngine := engine.New(database, logger)
+	// Compliance checker (built-in CIS/SOC2-style rules)
+	checker := compliance.New()
 
-	// AWS Collector
-	awsCollector := aws.NewCollector(cfg, database, driftEngine, logger)
+	// Drift engine
+	driftEngine := engine.New(database, checker, logger)
+
+	// AI remediation provider (free: Groq / Gemini / Ollama). nil if none configured.
+	llmClient := llm.New(llm.Settings{
+		Provider:     cfg.LLMProvider,
+		GroqAPIKey:   cfg.GroqAPIKey,
+		GroqModel:    cfg.GroqModel,
+		GeminiAPIKey: cfg.GeminiAPIKey,
+		GeminiModel:  cfg.GeminiModel,
+		OllamaHost:   cfg.OllamaHost,
+		OllamaModel:  cfg.OllamaModel,
+	})
+	logger.Info("AI remediation provider", zap.String("provider", cfg.LLMProviderName()))
+
+	// Collectors
+	collectors := []collector{
+		aws.NewCollector(cfg, database, driftEngine, logger),
+		gcp.NewCollector(database, driftEngine, logger),
+	}
+
+	// runScan executes every collector once. Shared by the scheduler and the
+	// on-demand /api/v1/scan endpoint.
+	runScan := func(ctx context.Context) error {
+		for _, col := range collectors {
+			if err := col.Collect(ctx); err != nil {
+				logger.Error("collector failed", zap.Error(err))
+			}
+		}
+		return nil
+	}
 
 	// Scheduler — poll every 15 minutes
 	sched := scheduler.New(logger)
-	sched.AddJob("@every 15m", "aws-collector", awsCollector.Collect)
+	sched.AddJob("@every 15m", "all-collectors", runScan)
 	sched.Start()
 	defer sched.Stop()
 
 	// Run first collection immediately on startup
 	go func() {
 		logger.Info("running initial drift collection")
-		ctx := context.Background()
-		if err := awsCollector.Collect(ctx); err != nil {
+		if err := runScan(context.Background()); err != nil {
 			logger.Error("initial collection failed", zap.Error(err))
 		}
 	}()
 
 	// HTTP server
-	router := routes.Setup(cfg, database, redisClient, driftEngine, logger)
+	router := routes.Setup(cfg, database, redisClient, driftEngine, llmClient, runScan, logger)
 	srv := &http.Server{
 		Addr:         fmt.Sprintf(":%s", cfg.Port),
 		Handler:      router,

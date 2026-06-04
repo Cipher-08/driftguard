@@ -39,12 +39,15 @@ type Config struct {
 	// GitHub (for PR creation)
 	GitHubToken string
 
-	// Anthropic (AI remediation)
-	AnthropicAPIKey string
-	AnthropicModel  string
-
-	// OPA policies path
-	PoliciesPath string
+	// AI remediation — free, pluggable providers. The first one with
+	// credentials is used (order: Groq, Gemini, Ollama).
+	LLMProvider  string // optional explicit override: groq|gemini|ollama
+	GroqAPIKey   string
+	GroqModel    string
+	GeminiAPIKey string
+	GeminiModel  string
+	OllamaHost   string
+	OllamaModel  string
 }
 
 func Load() (*Config, error) {
@@ -65,9 +68,13 @@ func Load() (*Config, error) {
 		AzureClientID:       getEnv("AZURE_CLIENT_ID", ""),
 		AzureClientSecret:   getEnv("AZURE_CLIENT_SECRET", ""),
 		GitHubToken:         getEnv("GITHUB_TOKEN", ""),
-		AnthropicAPIKey:     getEnv("ANTHROPIC_API_KEY", ""),
-		AnthropicModel:      getEnv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514"),
-		PoliciesPath:        getEnv("POLICIES_PATH", "./policies"),
+		LLMProvider:         getEnv("LLM_PROVIDER", ""),
+		GroqAPIKey:          getEnv("GROQ_API_KEY", ""),
+		GroqModel:           getEnv("GROQ_MODEL", ""),
+		GeminiAPIKey:        getEnv("GEMINI_API_KEY", ""),
+		GeminiModel:         getEnv("GEMINI_MODEL", ""),
+		OllamaHost:          getEnv("OLLAMA_HOST", ""),
+		OllamaModel:         getEnv("OLLAMA_MODEL", ""),
 	}
 
 	if cfg.JWTSecret == "change-me-in-production-please" && cfg.Environment == "production" {
@@ -75,6 +82,25 @@ func Load() (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// LLMProviderName reports which AI provider will be used, or "none".
+func (c *Config) LLMProviderName() string {
+	switch {
+	case c.LLMProvider == "groq" && c.GroqAPIKey != "":
+		return "groq"
+	case c.LLMProvider == "gemini" && c.GeminiAPIKey != "":
+		return "gemini"
+	case c.LLMProvider == "ollama" && c.OllamaHost != "":
+		return "ollama"
+	case c.GroqAPIKey != "":
+		return "groq"
+	case c.GeminiAPIKey != "":
+		return "gemini"
+	case c.OllamaHost != "":
+		return "ollama"
+	}
+	return "none"
 }
 
 func getEnv(key, fallback string) string {

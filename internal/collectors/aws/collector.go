@@ -120,51 +120,51 @@ func (c *Collector) collectForOrg(ctx context.Context, orgID uuid.UUID, accessKe
 		return fmt.Errorf("loading AWS config: %w", err)
 	}
 
-	   var resources []*models.Resource
+	var resources []*models.Resource
 
-	   // Collect EC2 instances
-	   ec2Resources, err := c.collectEC2(ctx, cfg, orgID, region)
-	   if err != nil {
-		   c.logger.Warn("EC2 collection failed", zap.Error(err), zap.String("org_id", orgID.String()))
-	   } else {
-		   resources = append(resources, ec2Resources...)
-	   }
+	// Collect EC2 instances
+	ec2Resources, err := c.collectEC2(ctx, cfg, orgID, region)
+	if err != nil {
+		c.logger.Warn("EC2 collection failed", zap.Error(err), zap.String("org_id", orgID.String()))
+	} else {
+		resources = append(resources, ec2Resources...)
+	}
 
-	   // Collect S3 buckets
-	   s3Resources, err := c.collectS3(ctx, cfg, orgID, region)
-	   if err != nil {
-		   c.logger.Warn("S3 collection failed", zap.Error(err), zap.String("org_id", orgID.String()))
-	   } else {
-		   resources = append(resources, s3Resources...)
-	   }
+	// Collect S3 buckets
+	s3Resources, err := c.collectS3(ctx, cfg, orgID, region)
+	if err != nil {
+		c.logger.Warn("S3 collection failed", zap.Error(err), zap.String("org_id", orgID.String()))
+	} else {
+		resources = append(resources, s3Resources...)
+	}
 
-	   // Collect IAM roles (always use us-east-1 for IAM)
-	   iamRegion := "us-east-1"
-	   iamCfg, iamErr := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(iamRegion))
-	   if iamErr != nil {
-		   c.logger.Warn("IAM config load failed", zap.Error(iamErr), zap.String("org_id", orgID.String()))
-	   } else {
-		   iamResources, err := c.collectIAM(ctx, iamCfg, orgID)
-		   if err != nil {
-			   c.logger.Warn("IAM collection failed", zap.Error(err), zap.String("org_id", orgID.String()))
-		   } else {
-			   resources = append(resources, iamResources...)
-		   }
-	   }
+	// Collect IAM roles (always use us-east-1 for IAM)
+	iamRegion := "us-east-1"
+	iamCfg, iamErr := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(iamRegion))
+	if iamErr != nil {
+		c.logger.Warn("IAM config load failed", zap.Error(iamErr), zap.String("org_id", orgID.String()))
+	} else {
+		iamResources, err := c.collectIAM(ctx, iamCfg, orgID)
+		if err != nil {
+			c.logger.Warn("IAM collection failed", zap.Error(err), zap.String("org_id", orgID.String()))
+		} else {
+			resources = append(resources, iamResources...)
+		}
+	}
 
-	   c.logger.Info("collected AWS resources",
-		   zap.Int("count", len(resources)),
-		   zap.String("org_id", orgID.String()),
-	   )
+	c.logger.Info("collected AWS resources",
+		zap.Int("count", len(resources)),
+		zap.String("org_id", orgID.String()),
+	)
 
-	   // Upsert resources and detect drift
-	   for _, r := range resources {
-		   if err := c.upsertResource(ctx, r); err != nil {
-			   c.logger.Error("failed to upsert resource", zap.String("resource_id", r.ResourceID), zap.Error(err))
-		   }
-	   }
+	// Upsert resources and detect drift
+	for _, r := range resources {
+		if err := c.engine.UpsertResource(ctx, r); err != nil {
+			c.logger.Error("failed to upsert resource", zap.String("resource_id", r.ResourceID), zap.Error(err))
+		}
+	}
 
-	   return nil
+	return nil
 }
 
 // collectEC2 fetches all EC2 instances and returns them as Resource objects
@@ -181,63 +181,63 @@ func (c *Collector) collectEC2(ctx context.Context, cfg aws.Config, orgID uuid.U
 		},
 	})
 
-	   now := time.Now().UTC()
-	   for paginator.HasMorePages() {
-		   page, err := paginator.NextPage(ctx)
-		   if err != nil {
-			   c.logger.Warn("EC2 pagination failed", zap.Error(err), zap.String("org_id", orgID.String()))
-			   return nil, fmt.Errorf("describing EC2 instances: %w", err)
-		   }
+	now := time.Now().UTC()
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			c.logger.Warn("EC2 pagination failed", zap.Error(err), zap.String("org_id", orgID.String()))
+			return nil, fmt.Errorf("describing EC2 instances: %w", err)
+		}
 
-		   for _, reservation := range page.Reservations {
-			   for _, instance := range reservation.Instances {
-				   // Extract tags as a map
-				   tags := make(map[string]string)
-				   name := ""
-				   for _, tag := range instance.Tags {
-					   tags[aws.ToString(tag.Key)] = aws.ToString(tag.Value)
-					   if aws.ToString(tag.Key) == "Name" {
-						   name = aws.ToString(tag.Value)
-					   }
-				   }
+		for _, reservation := range page.Reservations {
+			for _, instance := range reservation.Instances {
+				// Extract tags as a map
+				tags := make(map[string]string)
+				name := ""
+				for _, tag := range instance.Tags {
+					tags[aws.ToString(tag.Key)] = aws.ToString(tag.Value)
+					if aws.ToString(tag.Key) == "Name" {
+						name = aws.ToString(tag.Value)
+					}
+				}
 
-				   iamProfile := iamProfileName(instance.IamInstanceProfile)
-				   liveState := map[string]interface{}{
-					   "instance_id":   aws.ToString(instance.InstanceId),
-					   "instance_type": string(instance.InstanceType),
-					   "state":         string(instance.State.Name),
-					   "availability_zone": aws.ToString(instance.Placement.AvailabilityZone),
-					   "subnet_id":     aws.ToString(instance.SubnetId),
-					   "vpc_id":        aws.ToString(instance.VpcId),
-					   "private_ip":    aws.ToString(instance.PrivateIpAddress),
-					   "public_ip":     aws.ToString(instance.PublicIpAddress),
-					   "ami_id":        aws.ToString(instance.ImageId),
-					   "key_name":      aws.ToString(instance.KeyName),
-					   "iam_profile":   iamProfile,
-					   "monitoring":    string(instance.Monitoring.State),
-					   "ebs_optimized": aws.ToBool(instance.EbsOptimized),
-					   "termination_protection": false, // fetched separately if needed
-					   "tags":          tags,
-					   "security_groups": extractSecurityGroupIDs(instance.SecurityGroups),
-					   // "scanned_at":  now, // Do not include in drift input
-				   }
+				iamProfile := iamProfileName(instance.IamInstanceProfile)
+				liveState := map[string]interface{}{
+					"instance_id":            aws.ToString(instance.InstanceId),
+					"instance_type":          string(instance.InstanceType),
+					"state":                  string(instance.State.Name),
+					"availability_zone":      aws.ToString(instance.Placement.AvailabilityZone),
+					"subnet_id":              aws.ToString(instance.SubnetId),
+					"vpc_id":                 aws.ToString(instance.VpcId),
+					"private_ip":             aws.ToString(instance.PrivateIpAddress),
+					"public_ip":              aws.ToString(instance.PublicIpAddress),
+					"ami_id":                 aws.ToString(instance.ImageId),
+					"key_name":               aws.ToString(instance.KeyName),
+					"iam_profile":            iamProfile,
+					"monitoring":             string(instance.Monitoring.State),
+					"ebs_optimized":          aws.ToBool(instance.EbsOptimized),
+					"termination_protection": false, // fetched separately if needed
+					"tags":                   tags,
+					"security_groups":        extractSecurityGroupIDs(instance.SecurityGroups),
+					// "scanned_at":  now, // Do not include in drift input
+				}
 
-				   stateBytes, _ := json.Marshal(liveState)
+				stateBytes, _ := json.Marshal(liveState)
 
-				   r := &models.Resource{
-					   OrgID:         orgID,
-					   Provider:      "aws",
-					   Region:        region,
-					   ResourceType:  "ec2_instance",
-					   ResourceID:    aws.ToString(instance.InstanceId),
-					   ResourceName:  name,
-					   LiveState:     stateBytes,
-					   LastScannedAt: now,
-				   }
-				   resources = append(resources, r)
-			   }
-		   }
-	   }
+				r := &models.Resource{
+					OrgID:         orgID,
+					Provider:      "aws",
+					Region:        region,
+					ResourceType:  "ec2_instance",
+					ResourceID:    aws.ToString(instance.InstanceId),
+					ResourceName:  name,
+					LiveState:     stateBytes,
+					LastScannedAt: now,
+				}
+				resources = append(resources, r)
+			}
+		}
+	}
 
 	return resources, nil
 }
@@ -252,64 +252,64 @@ func (c *Collector) collectS3(ctx context.Context, cfg aws.Config, orgID uuid.UU
 	}
 
 	var resources []*models.Resource
-	   now := time.Now().UTC()
-	   for _, bucket := range result.Buckets {
-		   bucketName := aws.ToString(bucket.Name)
+	now := time.Now().UTC()
+	for _, bucket := range result.Buckets {
+		bucketName := aws.ToString(bucket.Name)
 
-		   // Get bucket versioning
-		   versioningStatus := "Disabled"
-		   versioning, err := client.GetBucketVersioning(ctx, &s3.GetBucketVersioningInput{
-			   Bucket: aws.String(bucketName),
-		   })
-		   if err == nil && versioning.Status != "" {
-			   versioningStatus = string(versioning.Status)
-		   }
+		// Get bucket versioning
+		versioningStatus := "Disabled"
+		versioning, err := client.GetBucketVersioning(ctx, &s3.GetBucketVersioningInput{
+			Bucket: aws.String(bucketName),
+		})
+		if err == nil && versioning.Status != "" {
+			versioningStatus = string(versioning.Status)
+		}
 
-		   // Get bucket encryption
-		   encryptionEnabled := false
-		   _, err = client.GetBucketEncryption(ctx, &s3.GetBucketEncryptionInput{
-			   Bucket: aws.String(bucketName),
-		   })
-		   if err == nil {
-			   encryptionEnabled = true
-		   }
+		// Get bucket encryption
+		encryptionEnabled := false
+		_, err = client.GetBucketEncryption(ctx, &s3.GetBucketEncryptionInput{
+			Bucket: aws.String(bucketName),
+		})
+		if err == nil {
+			encryptionEnabled = true
+		}
 
-		   // Get public access block
-		   publicAccessBlocked := false
-		   pab, err := client.GetPublicAccessBlock(ctx, &s3.GetPublicAccessBlockInput{
-			   Bucket: aws.String(bucketName),
-		   })
-		   if err == nil && pab.PublicAccessBlockConfiguration != nil {
-			   cfg := pab.PublicAccessBlockConfiguration
-			   publicAccessBlocked = aws.ToBool(cfg.BlockPublicAcls) &&
-				   aws.ToBool(cfg.BlockPublicPolicy) &&
-				   aws.ToBool(cfg.IgnorePublicAcls) &&
-				   aws.ToBool(cfg.RestrictPublicBuckets)
-		   }
+		// Get public access block
+		publicAccessBlocked := false
+		pab, err := client.GetPublicAccessBlock(ctx, &s3.GetPublicAccessBlockInput{
+			Bucket: aws.String(bucketName),
+		})
+		if err == nil && pab.PublicAccessBlockConfiguration != nil {
+			cfg := pab.PublicAccessBlockConfiguration
+			publicAccessBlocked = aws.ToBool(cfg.BlockPublicAcls) &&
+				aws.ToBool(cfg.BlockPublicPolicy) &&
+				aws.ToBool(cfg.IgnorePublicAcls) &&
+				aws.ToBool(cfg.RestrictPublicBuckets)
+		}
 
-		   liveState := map[string]interface{}{
-			   "bucket_name":           bucketName,
-			   "creation_date":         bucket.CreationDate,
-			   "versioning_status":     versioningStatus,
-			   "encryption_enabled":    encryptionEnabled,
-			   "public_access_blocked": publicAccessBlocked,
-			   "region":                region,
-			   // "scanned_at":         now, // Do not include in drift input
-		   }
+		liveState := map[string]interface{}{
+			"bucket_name":           bucketName,
+			"creation_date":         bucket.CreationDate,
+			"versioning_status":     versioningStatus,
+			"encryption_enabled":    encryptionEnabled,
+			"public_access_blocked": publicAccessBlocked,
+			"region":                region,
+			// "scanned_at":         now, // Do not include in drift input
+		}
 
-		   stateBytes, _ := json.Marshal(liveState)
+		stateBytes, _ := json.Marshal(liveState)
 
-		   resources = append(resources, &models.Resource{
-			   OrgID:         orgID,
-			   Provider:      "aws",
-			   Region:        region,
-			   ResourceType:  "s3_bucket",
-			   ResourceID:    bucketName,
-			   ResourceName:  bucketName,
-			   LiveState:     stateBytes,
-			   LastScannedAt: now,
-		   })
-	   }
+		resources = append(resources, &models.Resource{
+			OrgID:         orgID,
+			Provider:      "aws",
+			Region:        region,
+			ResourceType:  "s3_bucket",
+			ResourceID:    bucketName,
+			ResourceName:  bucketName,
+			LiveState:     stateBytes,
+			LastScannedAt: now,
+		})
+	}
 
 	return resources, nil
 }
@@ -321,67 +321,43 @@ func (c *Collector) collectIAM(ctx context.Context, cfg aws.Config, orgID uuid.U
 	var resources []*models.Resource
 	paginator := iam.NewListRolesPaginator(client, &iam.ListRolesInput{})
 
-	   now := time.Now().UTC()
-	   for paginator.HasMorePages() {
-		   page, err := paginator.NextPage(ctx)
-		   if err != nil {
-			   c.logger.Warn("IAM pagination failed", zap.Error(err), zap.String("org_id", orgID.String()))
-			   return nil, fmt.Errorf("listing IAM roles: %w", err)
-		   }
+	now := time.Now().UTC()
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			c.logger.Warn("IAM pagination failed", zap.Error(err), zap.String("org_id", orgID.String()))
+			return nil, fmt.Errorf("listing IAM roles: %w", err)
+		}
 
-		   for _, role := range page.Roles {
-			   liveState := map[string]interface{}{
-				   "role_name":            aws.ToString(role.RoleName),
-				   "role_id":              aws.ToString(role.RoleId),
-				   "arn":                  aws.ToString(role.Arn),
-				   "description":          aws.ToString(role.Description),
-				   "max_session_duration": role.MaxSessionDuration,
-				   "assume_role_policy":   aws.ToString(role.AssumeRolePolicyDocument),
-				   "path":                 aws.ToString(role.Path),
-				   "created_at":           role.CreateDate,
-				   // "scanned_at":        now, // Do not include in drift input
-			   }
+		for _, role := range page.Roles {
+			liveState := map[string]interface{}{
+				"role_name":            aws.ToString(role.RoleName),
+				"role_id":              aws.ToString(role.RoleId),
+				"arn":                  aws.ToString(role.Arn),
+				"description":          aws.ToString(role.Description),
+				"max_session_duration": role.MaxSessionDuration,
+				"assume_role_policy":   aws.ToString(role.AssumeRolePolicyDocument),
+				"path":                 aws.ToString(role.Path),
+				"created_at":           role.CreateDate,
+				// "scanned_at":        now, // Do not include in drift input
+			}
 
-			   stateBytes, _ := json.Marshal(liveState)
+			stateBytes, _ := json.Marshal(liveState)
 
-			   resources = append(resources, &models.Resource{
-				   OrgID:         orgID,
-				   Provider:      "aws",
-				   Region:        "global",
-				   ResourceType:  "iam_role",
-				   ResourceID:    aws.ToString(role.RoleName),
-				   ResourceName:  aws.ToString(role.RoleName),
-				   LiveState:     stateBytes,
-				   LastScannedAt: now,
-			   })
-		   }
-	   }
-
-	return resources, nil
-}
-
-// upsertResource saves the resource and triggers drift detection
-func (c *Collector) upsertResource(ctx context.Context, r *models.Resource) error {
-	var resourceID uuid.UUID
-
-	err := c.db.QueryRow(ctx, `
-		INSERT INTO resources (org_id, provider, region, resource_type, resource_id, resource_name, live_state, last_scanned_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
-		ON CONFLICT (org_id, provider, region, resource_type, resource_id)
-		DO UPDATE SET
-			resource_name  = EXCLUDED.resource_name,
-			live_state     = EXCLUDED.live_state,
-			last_scanned_at = EXCLUDED.last_scanned_at
-		RETURNING id
-	`, r.OrgID, r.Provider, r.Region, r.ResourceType, r.ResourceID, r.ResourceName, r.LiveState).Scan(&resourceID)
-	if err != nil {
-		return fmt.Errorf("upserting resource: %w", err)
+			resources = append(resources, &models.Resource{
+				OrgID:         orgID,
+				Provider:      "aws",
+				Region:        "global",
+				ResourceType:  "iam_role",
+				ResourceID:    aws.ToString(role.RoleName),
+				ResourceName:  aws.ToString(role.RoleName),
+				LiveState:     stateBytes,
+				LastScannedAt: now,
+			})
+		}
 	}
 
-	r.ID = resourceID
-
-	// Trigger drift detection
-	return c.engine.DetectDrift(ctx, r)
+	return resources, nil
 }
 
 // --- helpers ---

@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"time"
 
+	"github.com/driftguard/driftguard/internal/compliance"
 	"github.com/driftguard/driftguard/internal/models"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -15,17 +16,42 @@ import (
 
 // Engine detects drift between live and declared state
 type Engine struct {
-	db     *pgxpool.Pool
-	logger *zap.Logger
+	db         *pgxpool.Pool
+	compliance *compliance.Checker
+	logger     *zap.Logger
 }
 
-func New(db *pgxpool.Pool, logger *zap.Logger) *Engine {
-	return &Engine{db: db, logger: logger}
+func New(db *pgxpool.Pool, checker *compliance.Checker, logger *zap.Logger) *Engine {
+	return &Engine{db: db, compliance: checker, logger: logger}
 }
 
-// DetectDrift compares live state against declared state for a resource
-// and creates/updates drift records accordingly
+// UpsertResource saves a live resource snapshot (preserving any declared_state
+// already recorded for it) and then runs drift + compliance detection.
+func (e *Engine) UpsertResource(ctx context.Context, r *models.Resource) error {
+	err := e.db.QueryRow(ctx, `
+		INSERT INTO resources (org_id, provider, region, resource_type, resource_id, resource_name, live_state, last_scanned_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+		ON CONFLICT (org_id, provider, region, resource_type, resource_id)
+		DO UPDATE SET
+			resource_name   = EXCLUDED.resource_name,
+			live_state      = EXCLUDED.live_state,
+			last_scanned_at = EXCLUDED.last_scanned_at
+		RETURNING id, declared_state
+	`, r.OrgID, r.Provider, r.Region, r.ResourceType, r.ResourceID, r.ResourceName, r.LiveState).Scan(&r.ID, &r.DeclaredState)
+	if err != nil {
+		return fmt.Errorf("upserting resource: %w", err)
+	}
+	return e.DetectDrift(ctx, r)
+}
+
+// DetectDrift compares live state against declared state for a resource,
+// creates/updates drift records, and evaluates compliance.
 func (e *Engine) DetectDrift(ctx context.Context, r *models.Resource) error {
+	// Compliance is evaluated on every scan, independent of drift.
+	if err := e.evaluateCompliance(ctx, r); err != nil {
+		e.logger.Warn("compliance evaluation failed", zap.String("resource_id", r.ResourceID), zap.Error(err))
+	}
+
 	// If no declared state, mark as unmanaged drift
 	if r.DeclaredState == nil || len(r.DeclaredState) == 0 || string(r.DeclaredState) == "null" {
 		return e.upsertDrift(ctx, r, "unmanaged", models.DriftDiff{}, nil, "low")
@@ -163,37 +189,64 @@ func (e *Engine) upsertDrift(ctx context.Context, r *models.Resource, driftType 
 		changedByStr = *changedBy
 	}
 
+	// One open drift per resource (enforced by uq_drift_open_per_resource).
+	// Insert, or update the existing open record in place.
 	var driftID uuid.UUID
+	var inserted bool
 	err = e.db.QueryRow(ctx, `
 		INSERT INTO drift_records (org_id, resource_id, drift_type, severity, diff, changed_by, is_resolved)
 		VALUES ($1, $2, $3, $4, $5, $6, false)
-		ON CONFLICT DO NOTHING
-		RETURNING id
-	`, r.OrgID, r.ID, driftType, severity, diffBytes, changedByStr).Scan(&driftID)
-
+		ON CONFLICT (resource_id) WHERE is_resolved = false
+		DO UPDATE SET
+			drift_type = EXCLUDED.drift_type,
+			severity   = EXCLUDED.severity,
+			diff       = EXCLUDED.diff,
+			changed_by = EXCLUDED.changed_by
+		RETURNING id, (xmax = 0) AS inserted
+	`, r.OrgID, r.ID, driftType, severity, diffBytes, changedByStr).Scan(&driftID, &inserted)
 	if err != nil {
-		// Already exists — update severity and diff if things changed
-		_, err = e.db.Exec(ctx, `
-			UPDATE drift_records
-			SET severity = $1, diff = $2, changed_by = $3
-			WHERE resource_id = $4 AND is_resolved = false
-		`, severity, diffBytes, changedByStr, r.ID)
-		if err != nil {
-			return fmt.Errorf("updating drift record: %w", err)
-		}
-		e.logger.Debug("updated existing drift record", zap.String("resource_id", r.ResourceID))
-		return nil
+		return fmt.Errorf("upserting drift record: %w", err)
 	}
 
-	e.logger.Info("new drift detected",
-		zap.String("resource_type", r.ResourceType),
-		zap.String("resource_id", r.ResourceID),
-		zap.String("drift_type", driftType),
-		zap.String("severity", severity),
-		zap.Int("changed_fields", len(diff.Fields)),
-	)
-
+	if inserted {
+		e.logger.Info("new drift detected",
+			zap.String("resource_type", r.ResourceType),
+			zap.String("resource_id", r.ResourceID),
+			zap.String("drift_type", driftType),
+			zap.String("severity", severity),
+			zap.Int("changed_fields", len(diff.Fields)),
+		)
+	}
 	return nil
+}
+
+// evaluateCompliance runs built-in policy checks against a resource's live state
+// and reconciles the compliance_violations table (delete-then-insert per resource).
+func (e *Engine) evaluateCompliance(ctx context.Context, r *models.Resource) error {
+	if e.compliance == nil {
+		return nil
+	}
+	violations := e.compliance.Evaluate(r.ResourceType, r.LiveState)
+
+	tx, err := e.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `DELETE FROM compliance_violations WHERE resource_id = $1`, r.ID); err != nil {
+		return err
+	}
+	for _, v := range violations {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO compliance_violations
+				(org_id, resource_id, drift_id, policy_id, policy_name, framework, description, severity)
+			VALUES ($1, $2, NULL, $3, $4, $5, $6, $7)
+		`, r.OrgID, r.ID, v.PolicyID, v.PolicyName, v.Framework, v.Description, v.Severity); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
 }
 
 // resolveDrift marks open drift records as resolved for a resource
@@ -232,6 +285,27 @@ func (e *Engine) GetDriftSummary(ctx context.Context, orgID uuid.UUID) (*models.
 		&summary.UnresolvedCount,
 		&summary.ResolvedToday,
 		&summary.AffectedResources,
+	)
+	if err != nil {
+		return &summary, err
+	}
+
+	// Resource-level compliance posture.
+	err = e.db.QueryRow(ctx, `
+		SELECT
+			COUNT(*)                                                                  AS total_resources,
+			COUNT(*) FILTER (WHERE v.cnt > 0)                                          AS noncompliant,
+			COUNT(*) FILTER (WHERE COALESCE(v.cnt, 0) = 0)                             AS compliant
+		FROM resources r
+		LEFT JOIN (
+			SELECT resource_id, COUNT(*) AS cnt FROM compliance_violations
+			WHERE resource_id IS NOT NULL GROUP BY resource_id
+		) v ON v.resource_id = r.id
+		WHERE r.org_id = $1
+	`, orgID).Scan(
+		&summary.TotalResources,
+		&summary.NoncompliantResources,
+		&summary.CompliantResources,
 	)
 	return &summary, err
 }

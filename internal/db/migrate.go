@@ -192,4 +192,29 @@ CREATE INDEX IF NOT EXISTS idx_resources_provider ON resources(provider);
 CREATE INDEX IF NOT EXISTS idx_compliance_violations_drift_id ON compliance_violations(drift_id);
 `,
 	},
+	{
+		version: "002_compliance_and_drift_dedup",
+		sql: `
+-- Ensure at most one OPEN drift record per resource. Collapse any historical
+-- duplicates first (keep the most recent), then add a partial unique index.
+DELETE FROM drift_records a
+USING drift_records b
+WHERE a.is_resolved = false
+  AND b.is_resolved = false
+  AND a.resource_id = b.resource_id
+  AND a.created_at < b.created_at;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_drift_open_per_resource
+	ON drift_records (resource_id) WHERE is_resolved = false;
+
+-- Compliance is resource-level, not strictly drift-level. Link violations to the
+-- resource so we can report compliant vs non-compliant resources.
+ALTER TABLE compliance_violations ADD COLUMN IF NOT EXISTS resource_id UUID REFERENCES resources(id) ON DELETE CASCADE;
+ALTER TABLE compliance_violations ALTER COLUMN drift_id DROP NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_compliance_violations_resource_id ON compliance_violations(resource_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_violation_per_resource_policy
+	ON compliance_violations (resource_id, policy_id) WHERE resource_id IS NOT NULL;
+`,
+	},
 }
