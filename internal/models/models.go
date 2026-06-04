@@ -109,6 +109,10 @@ type DriftSummary struct {
 	UnresolvedCount   int `json:"unresolved_count"`
 	ResolvedToday     int `json:"resolved_today"`
 	AffectedResources int `json:"affected_resources"`
+	// Compliance posture (resource-level)
+	TotalResources        int `json:"total_resources"`
+	CompliantResources    int `json:"compliant_resources"`
+	NoncompliantResources int `json:"noncompliant_resources"`
 }
 
 // CloudCredential stores cloud provider credentials per org
